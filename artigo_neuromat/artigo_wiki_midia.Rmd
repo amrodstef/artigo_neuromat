@@ -1,0 +1,615 @@
+---
+title: "Código das etapas metodológicas de 'Entre exposição e busca: mídia, Wikipédia e circulação do conhecimento científico em ecossistemas digitais' "
+author: "André M. Rodeguero Stefanuto"
+date: "2026-03-11"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Primeiro de tudo, devemos carregar os pacotes que serão necessários para as etapas desenvolvidas a seguir.
+
+```{r carregando pacotes, results = FALSE, message = FALSE, warning = FALSE}
+library(lubridate)
+library(stringr)
+library(dplyr)
+library(tidyverse)
+library(quanteda)
+library(quanteda.textstats)
+library(stringi)
+library(forcats)
+library(cowplot)
+library(ggh4x)
+library(tseries)    
+library(lmtest)     
+library(forecast)   
+library(ggsci)
+library(paletteer)
+library(gridExtra)
+library(flextable)
+library(svglite)
+library(officer)
+```
+
+Os dados coletados manualmente das publicações documentadas no NIRA (NeuroMat Individual Report of Activities) e que estavam armazenados em uma planilha .csv devem ser importados. Aqui, os dados já estão triados conforme os critérios da pesquisa: apenas publicações textuais, em língua portuguesa e feitas entre jul/2015 e jul/2025.
+
+```{r importando os dados}
+clip_analise <- read.csv("dados_publicacoes.csv", head = TRUE, sep = ",", encoding = "UTF-8")
+```
+
+Em seguida, realiza-se a contagem de textos publicados por cada veículo, para fins de documentação.
+
+```{r contagem de publicações/veículo}
+veic_cont <- clip_analise %>% 
+  select(meio_comun_verif) %>% 
+  group_by(meio_comun_verif) %>% 
+  count() %>% 
+  arrange(n)
+```
+
+Sobre os textos contidos em "clip_analise", na coluna "texto_completo", foram aplicadas procedimentos de limpeza e pré-processamento dos textos, envolvendo a remoção de caracteres especiais, conversão para minúsculas e remoção de palavras tidas como "stopwords". A função que realiza esses procedimentos está descrita abaixo, em "clean_text" - e aplicada logo em seguida.
+
+```{r criando função de limpeza}
+#Criando a função de limpeza de textos
+clean_text <- function(text) {
+  # Converte texto para minúsculas
+  text <- tolower(text)
+  
+  # Remove 'stopwords'
+  st <- stopwords("pt")
+  for (i in 1:length(st)) {
+    text <- gsub(paste0("\\b", st[i], "\\b"), "", text) 
+  }
+  # Remove pontuação e números
+  text <- str_replace_all(text, "[[:punct:]]", "")
+  text <- str_replace_all(text, "[[:digit:]]", "")
+  
+  # Remove caracteres não alfanuméricos
+  text <- str_replace_all(text, "[^[:alnum:]\\s]", "")
+  
+  # Remove espaços extra
+  text <- str_replace_all(text, "  ", " ")
+  text <- str_replace_all(text, "  ", " ")
+  
+  # Remove ("corta") espaços extra após os textos
+  text <- trimws(text)
+  
+  # Converte para ASCII
+  text <- stri_trans_general(text, "latin-ascii")
+  
+  #Remove 'stopwords' que possam ter surgido após outros processos de limpeza
+  for (i in 1:length(st)) {
+    text <- gsub(paste0("\\b", st[i], "\\b"), "", text) 
+  }
+  
+  return(text)
+}
+```
+
+```{r aplicando função de limpeza}
+#Realizando a limpeza dos textos
+clip_analise <- clip_analise %>% 
+  mutate(texto_limpo = clean_text(texto_completo))
+```
+
+Com os termos de interesse identificados (etapa não automatizada e não presente nos códigos) e com os textos processados, realizou-se uma primeira substituição de termos.
+
+```{r substituição n-gramas pré-lematização}
+wrong_words <- c("estimulacao magnetica transcraniana")
+
+new_words <- c("estimulacao_magnetica_transcraniana")
+
+for (i in seq_along(wrong_words)) {
+   clip_analise$texto_limpo <- str_replace_all(clip_analise$texto_limpo, 
+                                                          wrong_words[i], new_words[i])
+}
+
+clip_analise$texto_limpo <- str_replace_all(clip_analise$texto_limpo, "  ", " ")
+clip_analise$texto_limpo <- str_replace_all(clip_analise$texto_limpo, "  ", " ")
+clip_analise$texto_limpo <- str_replace_all(clip_analise$texto_limpo, "\n", " ")
+```
+
+Em seguida, o termo substituído e outros termos levantados durante a leitura dos textos foram agrupados em uma única palavra de mesma raiz, conforme identificado abaixo. Esse processo foi repetido após a lematização dos termos em uma palavra de mesma raiz, permitindo que fossem criados novos n-gramas a partir dos termos já lematizados e, com isso, a contagem de termos pôde ser realizada para termos simples e para n-gramnas conjuntamente.
+
+```{r lematização dos termos de interesse}
+# Conversão dos dados para formato 'corpus'
+txt_corpus <- corpus(clip_analise$texto_limpo)
+
+#Tokenização  (isto é, conversão de um texto sequencial para um conjunto 
+# de palavras "soltas") do corpus
+txt_tks <- tokens(txt_corpus)
+
+#Criação de um dicionário para agrupamento dos termos
+lemma_dict <- dictionary(list(
+  rede = c("rede","redes"),
+  modelo = c("modelo","modelos", "modelagem"),
+  markov = c("markov","markovianos"),
+  estocastica = c("estocastica","estocasticos","estocasticidade","estocasticas", "estocastico"),
+  eeg = c("eletroencefalografia", "eletroencefalograma", "eletroencefalograficos", "eletroencefalogramas", "eletroencefalografico", "eletroencefalogramaeeg", "eeg"),
+  neurociencia = c("neurociencia", "neurocientista", "neurocientistas", "neurociencias", "neurocientificos", "neurocientifica"),
+  lesoes = c("lesao", "lesoes"),
+  parkinson = c("parkinson", "parkinsoniano"),
+  tms = c("tms", "estimulacao_magnetica_transcraniana")
+))
+
+txt_tks <- tokens_replace(
+  txt_tks,
+  pattern = unlist(lemma_dict),
+  replacement = rep(names(lemma_dict), lengths(lemma_dict))
+)
+
+#Retornando os tokens lematizados para o banco de dados original
+clip_analise$texto_limpo <- sapply(txt_tks, paste, collapse = " ")
+```
+
+```{r substituição n-gramas pós-lematização}
+wrong_words <- c(paste(rep("modelo"), c("matematicos", "estocastica", "matematica",
+                     "disparos", "probabilisticos", "computacional", "matematico",
+                     "computacionais", "estatisticos", "neuronal", "neuronios")), 
+                 paste(rep("rede"), c("neuronios", "neuronais", "complexas", "nervos", 
+                 "cerebral", "neurais", "neural")))
+
+new_words <- c(paste0(rep("modelos_", 11), "matematicos"), paste0(rep("redes_", 7), "neurais"))
+
+#Substituição dos termos e re-implementação em "clip_analise$texto_limpo"
+for (i in seq_along(wrong_words)) {
+   clip_analise$texto_limpo <- str_replace_all(clip_analise$texto_limpo, 
+                                                          wrong_words[i], new_words[i])
+}
+
+clip_analise$texto_limpo <- str_replace_all(clip_analise$texto_limpo, "  ", " ")
+clip_analise$texto_limpo <- str_replace_all(clip_analise$texto_limpo, "  ", " ")
+clip_analise$texto_limpo <- str_replace_all(clip_analise$texto_limpo, "\n", " ")
+
+# Retokenizar para que identificação dos bigramas
+txt_tks <- tokens(corpus(clip_analise$texto_limpo))
+
+```
+
+A partir daqui, são realizadas diversos levantamentos de termos mais frequentes de forma geral, em todos os bancos de dados conjuntamente.Além disso, após a segmentação dos termos em categorias temáticas por meio de um dicionário, também são contabilizadas as ocorrências desses termos mensalmente. A contagem mensal dos termos categorizados (e definidos como 'termos de interesse') é a base, nas próximas etapas, para a análise da ocorrência temporal dos termos, individualmente.
+```{r levantamento termos mais frequentes total}
+#Aqui, o levantamento de termos funciona para respaldar a primeira selação,
+# não automatizada e para embasar a ocorrência mensal dos termos.
+freq_tokens <- txt_tks %>% 
+  dfm() %>% 
+  quanteda.textstats::textstat_frequency(.) %>% 
+  tibble() %>% 
+  filter(frequency > 1)
+
+#write.csv(freq_tokens, "freq_tokens.csv")
+```
+
+```{r criando dicionário de termos}
+#Criação de um dicionário para agrupar os termos, já lematizados, em categorias.
+dict_termos <- dictionary(list(
+      galves = c("\\bgalves\\b"),
+      neuromat = c("\\bneuromat\\b"),
+      
+      ferr_mat = paste0("\\b", c("modelos_matematicos",
+                        "grafos", "galveslocherbach"),
+                        "\\b"),
+      eeg = c("\\beeg\\b"),
+      tms = c("\\btms\\b"),
+      
+      con_neuromat = paste0("\\b", 
+                    c("estocastica", "markov",
+                      "redes_neurais"), 
+                    "\\b"),
+      neuro  = paste0("\\b", 
+                      c("neuromatematica", "neurociencia"), 
+                      "\\b"),
+      plexo = paste0("\\b", 
+                     c("lesoes", "plexo"), 
+                     "\\b"),
+      park = c("\\bparkinson\\b")
+    ))
+```
+
+```{r termos mais frequentes por mês}
+termos_dict <- unlist(dict_termos, use.names = FALSE) %>% 
+  unique()
+
+dfm_por_mes <- clip_analise %>% 
+  group_by(data_mes) %>% 
+  nest() %>% 
+  mutate(
+    tokens = map(data, ~ tokens(
+      as.character(.x$texto_limpo),
+      split_hyphen = FALSE
+    )),
+    dfm = map(tokens, ~ {
+      .x %>%
+        tokens_select(
+          pattern   = termos_dict,  # mantém os \b intactos
+          selection = "keep",
+          valuetype = "regex"
+        ) %>%
+        dfm()
+    })
+  ) %>%
+  select(data_mes, dfm) %>%
+  ungroup()
+
+dfm_por_mes$dfm[1]
+```
+
+```{r termos mais frequentes por mês - versão longa}
+#Para implementação dos dados nas análise, é necessário alterar o formato
+freq_dic_long <- dfm_por_mes %>%
+  mutate(
+    freq = map(dfm, ~ {
+      tibble(
+        termo    = featnames(.x),
+        contagem = as.numeric(colSums(.x))
+      )
+    })
+  ) %>%
+  select(data_mes, freq) %>%
+  unnest(freq) %>%
+  ungroup()
+
+freq_dic_long$data_mes <- as.Date(freq_dic_long$data_mes)
+
+freq_dic_long <- freq_dic_long %>%
+  complete(
+    data_mes = seq(
+      as.Date("2015-07-01"),
+      as.Date("2025-07-01"),
+      by = "month"
+    ),
+    termo,
+    fill = list(contagem = 0)
+  ) %>%
+  arrange(data_mes, termo)
+
+#Define uma ordem de fatores para a apresentação dos resultados.
+freq_dic_long$termo <- factor(freq_dic_long$termo,
+                                   levels = c("neuromat", "galves", "modelos_matematicos",
+                                              "grafos", "galveslocherbach", "eeg",
+                                              "tms", "estocastica", "markov",
+                                              "redes_neurais", "neurociencia",
+                                              "plexo", "lesoes", "parkinson"
+                                              ))
+```
+
+Após termos todas as ocorrências mensais dos termos de interesse contabilizadas, podemos seguir para a importação dos dados de acessos aos verbetes da Wikipédia selecionados. Aqui, destaca-se que tanto "termo" quanto "verbete" seguem a mesma nomenclatura, permitindo que as categorias sejma agrupadas e comparadas nas próximas etapas.
+
+```{r, importação dados pageviews}
+#Importação dos dados de visualizações de página já coletados e agrupados 
+pageviews_grouped <- read.csv("pageviews_gr.csv", header = TRUE)
+
+#Covnersão da classe dos dados da coluna "data_mes" para "Date"
+pageviews_grouped$data_mes <- as.Date(pageviews_grouped$data_mes)
+```
+
+```{r, merging pageviews e frequência termos}
+#Uma vez que o verbete "Neuromatemática" trata-se de um esboço, ele não foi 
+#incluído na análise. Assim, também foi removido da correspondências no termos.
+freq_termos_clip <- freq_dic_long %>% 
+  filter(termo != "neuromatematica")
+
+#Criação da nomenclatura dos pares termo-verbete para referência
+par_tv <- c("eeg" = "EEG", 
+            "estocastica" = "Estocásticos",
+            "galves" = "Antonio Galves",
+            "galveslocherbach" = "GalvesLöcherbach", 
+            "grafos" = "Grafos",
+            "lesoes" = "Lesão",
+            "markov" = "Markov",
+            "modelos_matematicos" = "Modelos",
+            "neurociencia" = "Neurociência",
+            "neuromat" = "CEPID-NeuroMat",
+            "parkinson" = "Parkinson",
+            "plexo" = "Plexo",
+            "redes_neurais" = "Redes Neurais",
+            "tms" = "TMS")
+
+#Junção dos dois bancos de dados
+merged_counting <- full_join(freq_termos_clip, pageviews_grouped, 
+                           by = c("termo", "data_mes")) %>%
+  arrange(termo, data_mes) %>% 
+  select(data_mes, termo, contagem, views) %>% 
+  mutate(views = replace_na(views, 0)) %>% 
+  mutate(termo_verbete = recode(termo, !!!par_tv)) %>%
+  group_by(termo, termo_verbete) %>% 
+  mutate( #normalização dos dados para o intervalo de 0 a 1
+         nm_cont = round((contagem - min(contagem)) / (max(contagem) - min(contagem)), 3),
+         nm_view = round((views - min(views)) / (max(views) - min(views)), 3)
+  ) %>% 
+  mutate(
+         mean_cont = round(mean(contagem, na.rm = TRUE), 2), #média
+         mean_view = round(mean(views, na.rm = TRUE), 2), #média
+         diff_contagem = c(NA, diff(contagem)), #diferença mensal
+         diff_views = c(NA, diff(views)), #diferença mensal
+         mean_nm_cont = round(mean(nm_cont, na.rm = TRUE), 2), #média dos valores normalizados
+         mean_nm_view = round(mean(nm_view, na.rm = TRUE), 2)  #média dos valores normalizados
+  ) %>%
+  ungroup() %>% 
+  select(termo, termo_verbete, data_mes, 
+         contagem, nm_cont, diff_contagem, mean_cont, mean_nm_cont, 
+         views, nm_view, diff_views, mean_view, mean_nm_view)
+```
+
+Com os dados agrupados, foi possível trabalhar nos aspectos de visualização de dados, para apresentação no artigo.
+
+```{r visualização temporal termo-verbete}
+#Conversão para formato longo, mais compatível com análises tidy,
+# assim como foi feito com os termos mais frequentes, anteriormente.
+merged_long <- merged_counting %>%
+  pivot_longer(
+    cols = c(nm_cont, nm_view),
+    names_to = "variavel",
+    values_to = "valor_norm"
+  )
+
+#Cálculo da média ponderadas simples dos números de visualizações normalizados 
+# entre 0 e 1.
+medias_normal <- merged_counting %>%
+  group_by(termo, termo_verbete) %>%
+  summarise(
+    media_cont = round(mean(nm_cont, na.rm = TRUE), 2),
+    media_view = round(mean(nm_view, na.rm = TRUE), 2)
+  )
+
+#Criação do gráfico base para composição do artigo.
+
+
+merged_plot <- ggplot(merged_long, aes(x = data_mes, y = valor_norm,
+                    color = variavel, group = variavel)) +
+  geom_line(linewidth = 0.6, alpha = 0.7) +
+  facet_wrap(~termo_verbete, ncol = 3, scales = "free_y") +
+  scale_color_manual(
+    values = c("nm_cont" = "#7e03a8", 
+               "nm_view" = "#f89540"),
+    labels = c("nm_cont" = "Frequência dos termos", 
+               "nm_view" = "Visualizações aos verbetes")
+  ) +
+  geom_hline(data = medias_normal, aes(yintercept = media_cont), 
+             linetype = "dashed", color = "#7e03a8", linewidth = .3) +
+  geom_hline(data = medias_normal, aes(yintercept = media_view), 
+             linetype = "dashed", color = "#f89540", linewidth = .3) +
+  
+  scale_x_date(date_breaks = "1 year", date_labels = "%Y") +
+  scale_y_continuous(labels = scales::label_number(decimal.mark = ",")) +
+  labs(
+    title = "Frequência dos pares termo-verbete (jul/2015 a jul/2025)",
+    x = NULL,
+    y = "Valor normalizado",
+    color = NULL
+  ) +
+  theme_bw() +
+  guides(color = guide_legend(ncol = 1))+
+  theme(
+    strip.text         = element_text(size = 13, color = "black"),
+    strip.background   = element_rect(fill = "grey92", color = "black"),
+    panel.border       = element_rect(color = "grey80", fill = NA, linewidth = 0.5),
+    axis.title.y       = element_text(size = 12, color = "black",
+                                      margin = margin(r = 10)),
+    axis.text.x        = element_text(size = 10, color = "black",
+                                      angle = 90, hjust = 1),
+    axis.text.y        = element_text(size = 10, color = "black"),
+    plot.title         = element_text(size = 14, face = "bold", color = "black"),
+    plot.caption       = element_text(size = 9, color = "grey40", hjust = 0),
+    panel.grid.major.x = element_line(linetype = "solid", color = "grey80", linewidth = .1),
+    panel.grid.minor.x = element_blank(),
+    panel.grid.major.y = element_line(linetype = "dashed", color = "grey80", linewidth = .1),
+    panel.grid.minor.y = element_blank(),
+    axis.line          = element_blank(),
+    axis.ticks         = element_blank(),
+    legend.position    = "none",
+    plot.margin = margin(t = 5, r = 5, b = 30, l = 5)
+  )
+
+#Este gráfico foi posteriormente editado em programa externo de vetorização,
+# Inkscape para ajustes pontuais.
+#Por isso, foi exportado em .svg
+
+#merged_plot
+
+#svglite("grafico_termoverbete.svg", width = 8, height = 9)
+#print(merged_plot)  # ou ggplot(...) diretamente aqui
+#dev.off()
+```
+
+```{r, tabela médias}
+#A tabela apresentada no gráfico também foi inicialmente gerada em R.
+tabela_medias <- merged_long %>%
+  distinct(termo_verbete, mean_cont, mean_view) %>%
+  arrange(termo_verbete) %>%
+  rename(
+    "Termo-Verbete"       = termo_verbete,
+    "Média Contagem"      = mean_cont,
+    "Média Visualizações" = mean_view
+  )
+
+# Construção da tabela
+ft <- flextable(tabela_medias) |>
+  bg(bg = "white", part = "all") |>
+  border_remove() |>
+  hline_top(part = "header", border = fp_border(color = "black", width = 1.5)) |>
+  hline(part = "header",     border = fp_border(color = "black", width = 1.0)) |>
+  hline_bottom(part = "body",border = fp_border(color = "black", width = 1.5)) |>
+  hline_top(part = "footer", border = fp_border(color = "black", width = 0.8)) |>
+  align(j = 1,   align = "left",   part = "all") |>
+  align(j = 2:3, align = "left", part = "all") |>
+  fontsize(size = 14, part = "body") |>                           
+  fontsize(size = 14, part = "header") |>                         
+  fontsize(size = 13, part = "footer") |>
+  italic(part = "footer") |>
+  bold(part = "header") |>
+  padding(padding.top    = 3.2, padding.bottom = 3.2,                
+          padding.left   = 4, padding.right  = 4, part = "all") |>
+  autofit()
+
+#Exportação em arquivo de texto para implementação no artigo
+#save_as_docx(ft, path = "tabela_word.docx")
+```
+
+A próxima etapa foi, então, começar a organização dos dados para a realização das análises de correlação. Foram realizadas análises de correlação de Spearman entre (1) os valores absolutos e (2) as diferenças mensais entre os dados; e correlações cruzadas entre (3) os valores absolutos.
+```{r, valores diferenciados}
+#Criando uma versão "nested" do banco de dados até aqui.
+#Agora, cada termo representa um tibble dentro de uma lista.
+nested_counting <- merged_counting %>%
+  filter(!is.na(diff_contagem) & !is.na(diff_views)) %>%
+  select(termo, termo_verbete, data_mes, contagem, views, diff_contagem, diff_views, nm_cont, nm_view) %>%
+  group_by(termo, termo_verbete) %>%
+  nest()
+```
+
+```{r teste spearman midia x wiki}
+#Análises de correlação de Spearman entre os valores absolutos
+spearman_clipwiki <- merged_counting |>
+  group_by(termo, termo_verbete) |>
+  summarise(
+    correlacao = cor.test(contagem, views, method = "spearman", exact = FALSE)$estimate,
+    p_valor    = cor.test(contagem, views, method = "spearman", exact = FALSE)$p.value,
+    .groups = "drop"
+  ) |>
+  mutate(significativo = p_valor < 0.05)
+
+#Análises de correlação de Spearman entre as diferenças mensais
+spearman_diffclipwiki <- merged_counting |>
+  group_by(termo, termo_verbete) |>
+  summarise(
+    correlacao = cor.test(diff_contagem, diff_views, method = "spearman", exact = FALSE)$estimate,
+    p_valor    = cor.test(diff_contagem, diff_views, method = "spearman", exact = FALSE)$p.value,
+    .groups = "drop"
+  ) |>
+  mutate(significativo = p_valor < 0.05)
+
+# Une os dois objetos com identificador de análise
+spearman_combined <- bind_rows(
+  spearman_clipwiki   %>% mutate(analise = "VA"),
+  spearman_diffclipwiki %>% mutate(analise = "VM")
+)
+```
+
+```{r teste spearman visualização heatmap}
+#Apresentação de um heatmap para visualização no artigo.
+#Ele será incoporado a outro heatmap mais adiante, antes da exportação
+heatmap_spearman <- ggplot(spearman_combined, aes(
+                              x = analise, 
+                              y = termo_verbete, 
+                              fill = correlacao)) +
+  geom_tile(color = "white", 
+            linewidth = 0.1) +
+  geom_text(
+    data = spearman_combined %>% filter(significativo == TRUE),
+    aes(
+      label = sprintf("%.2f", correlacao)),
+    size = 3.25, fontface = "bold", color = "black"
+  ) +
+    geom_text(
+      data = spearman_combined %>% filter(significativo == FALSE),
+    aes(label = sprintf("%.2f", correlacao)),
+    color = "gray30", size = 3, fontface = "plain"
+  ) +
+  scale_y_discrete(limits = rev) +
+  scale_fill_gradient2(
+    high      = "#7e03a8",
+    mid      = "white",
+    low     = "#f89540",
+    midpoint = 0,
+    limits   = c(-1, 1),
+    name     = "Rho"
+  ) +
+  scale_color_manual(
+    values = c("TRUE" = "black", "FALSE" = "gray60"),
+    guide  = "none"
+  ) +
+  labs(
+    x = "Valores",
+    y = NULL,
+    title = "Correlações de Spearman"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title   = element_text(size = 11.5, face = "bold", color = "black"),
+    axis.text.x  = element_text(size = 11, color = "black"),
+    axis.text.y  = element_text(size = 11, color = "black"),
+    panel.grid   = element_blank(),
+    legend.position =  "none" #"right"
+  )
+```
+
+```{r, Teste de correlação cruzada}
+calc_ccf <- function(dados, max_lag = 6) {
+  ccf_obj <- ccf(dados$contagem, dados$views, lag.max = max_lag, plot = FALSE)
+  
+  tibble(
+    lag        = as.numeric(ccf_obj$lag),
+    correlacao = as.numeric(ccf_obj$acf),
+    ic95       = qnorm(0.975) / sqrt(nrow(dados))
+  )
+}
+
+
+nested_counting <- nested_counting %>%
+  mutate(ccf = map(data, calc_ccf, max_lag = 6))
+
+ccf_resultados <- nested_counting %>%
+  select(termo, termo_verbete, ccf) %>%
+  unnest(ccf) %>% 
+  filter(lag <= 0) %>% 
+  mutate(significativo = abs(correlacao) > ic95)
+
+```
+
+```{r correlação cruzada heatmap}
+heatmap_cruzada <- ggplot(ccf_resultados, aes(x = lag, 
+                           y = termo_verbete, 
+                           fill = correlacao)) +
+  geom_tile(color = "white", linewidth = 0.1) +
+  geom_text(
+    data = ccf_resultados %>% filter(abs(correlacao) <= ic95),
+    aes(label = sprintf("%.2f", correlacao)),
+    color = "gray30", size = 3, fontface = "plain"
+  ) +
+  geom_text(
+    data = ccf_resultados %>% 
+      filter(abs(correlacao) > ic95),
+    aes(label = sprintf("%.2f", correlacao)),
+    color = "black", size = 3.25, fontface = "bold"
+  ) +
+  scale_y_discrete(limits = rev) +
+  scale_fill_gradient2(
+    high     = "#7e03a8",
+    mid      = "white",
+    low      = "#f89540",
+    midpoint = 0,
+    limits   = c(-1, 1),
+    name     = "Índice de\ncorrelação"
+  ) +
+  scale_x_continuous(breaks = -6:6) +
+  labs(x = "Lags", 
+       y = NULL,
+       title = "Correlações Cruzadas") +
+  theme_minimal() +
+  theme(
+    plot.title   = element_text(size = 11.5, face = "bold", color = "black"),
+    axis.text.y  = element_blank(),
+    axis.text.x  = element_text(size = 11, color = "black"),
+    #axis.text.y  = element_text(size = 11, color = "black"),
+    panel.grid   = element_blank(),
+    legend.position = "right"
+  )
+```
+
+```{r merging heatmaps}
+#Aqui, realiza-se a composição dos dois heatmaps para exportação.
+#Este gráfico também foi exportado em .svg para alterações pontuais no Inkscape.
+heatmap_grid <- plot_grid(heatmap_spearman, heatmap_cruzada,
+                ncol = 2,
+                labels = c("A", "B"),
+                rel_widths = c(2.25, 4.5))
+heatmap_grid <- ggdraw(heatmap_grid) +
+  theme(plot.background = element_rect(colour = "black", fill = NA, linewidth = 1))
+
+#heatmap_grid
+
+#svglite("heatmap_grid.svg", width = 9, height = 4)
+#print(heatmap_grid)  # ou ggplot(...) diretamente aqui
+#dev.off()
+```

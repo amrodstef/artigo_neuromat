@@ -5,8 +5,6 @@ Estes códigos se referem à metodologia utilizada em uma publicação submetida
 
 O artigo apresenta o título provisório de "Entre exposição e busca: mídia, Wikipédia e circulação do conhecimento científico em ecossistemas digitais" e  buscou explorar as relações temporais entre a ocorrência de determinados termos de interesse, dentro do contexto do CEPID NeuroMat, e o acesso a verbetes da Wikipédia correspondentes aos termos identificados.
 
-O artigo submetido tem autoria de André M. Rodeguero Stefanuto; João Alexandre Peschanski e Fernando J. da Paixão.
-
 ## Composição
 O repositório conta com arquivos utilizados para as análises descritas. São eles:
 1. "artigo_neuromat.Rproj" --> Representa o arquivo de gerenciamento do projeto, utilizado junto ao RStudio.<br> <br>
